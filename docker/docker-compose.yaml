@@ -1,0 +1,147 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────
+#  Paperless-ngx ML Data Platform
+#  Services: PostgreSQL, MinIO, Redpanda, Qdrant
+#  UIs:      Adminer, MinIO Console, Redpanda Console
+# ──────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: paperless_postgres
+      POSTGRES_DB: paperless
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d paperless"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Adminer (PostgreSQL UI) ──────────────────
+  adminer:
+    image: adminer:4
+    container_name: adminer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5050:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+
+  # ── MinIO ────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: paperless_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO init (create buckets) ──────────────
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 admin paperless_minio &&
+      mc mb --ignore-existing local/paperless-images &&
+      mc mb --ignore-existing local/paperless-datalake &&
+      mc mb --ignore-existing local/paperless-staging &&
+      echo 'Buckets ready.'
+      "
+
+  # ── Redpanda ─────────────────────────────────
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --smp 1
+      - --memory 512M
+      - --mode dev-container
+      - --set redpanda.log_retention_ms=604800000
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "19644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Redpanda topic init ──────────────────────
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    container_name: redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      rpk --brokers redpanda:9092 topic create paperless.uploads     --partitions 1 --replicas 1 --if-not-exists &&
+      rpk --brokers redpanda:9092 topic create paperless.corrections --partitions 1 --replicas 1 --if-not-exists &&
+      rpk --brokers redpanda:9092 topic create paperless.queries     --partitions 1 --replicas 1 --if-not-exists &&
+      rpk --brokers redpanda:9092 topic create paperless.feedback    --partitions 1 --replicas 1 --if-not-exists &&
+      echo 'Topics ready.'
+      "
+
+  # ── Redpanda Console ─────────────────────────
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.7.0
+    container_name: redpanda-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+
+  # ── Qdrant ───────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:
