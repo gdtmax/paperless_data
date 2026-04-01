@@ -3,6 +3,7 @@ COMPOSE = docker compose -f docker/docker-compose.yaml
 .PHONY: up down restart status logs clean
 .PHONY: up-db up-storage up-stream up-vector
 .PHONY: check-pg check-minio check-redpanda check-qdrant
+.PHONY: ingest ingest-iam ingest-squad augment-iam
 
 # ── Lifecycle ─────────────────────────────────
 
@@ -41,6 +42,35 @@ up-stream:
 
 up-vector:
 	$(COMPOSE) up -d qdrant
+
+# ── Ingestion Pipeline ────────────────────────
+
+ingest: ingest-iam ingest-squad augment-iam
+	@echo "Full ingestion pipeline complete."
+
+ingest-iam:
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm --network docker_default \
+		-e MINIO_ENDPOINT=minio:9000 \
+		-e MINIO_ACCESS_KEY=admin \
+		-e MINIO_SECRET_KEY=paperless_minio \
+		paperless-ingest python ingest_iam.py
+
+ingest-squad:
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm --network docker_default \
+		-e MINIO_ENDPOINT=minio:9000 \
+		-e MINIO_ACCESS_KEY=admin \
+		-e MINIO_SECRET_KEY=paperless_minio \
+		paperless-ingest python ingest_squad.py
+
+augment-iam:
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm --network docker_default \
+		-e MINIO_ENDPOINT=minio:9000 \
+		-e MINIO_ACCESS_KEY=admin \
+		-e MINIO_SECRET_KEY=paperless_minio \
+		paperless-ingest python augment_iam.py
 
 # ── Health checks ─────────────────────────────
 
