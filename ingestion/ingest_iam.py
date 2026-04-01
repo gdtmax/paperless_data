@@ -1,6 +1,6 @@
 """
 Ingest IAM Handwriting Dataset → MinIO
-Downloads from HuggingFace, extracts line images + transcriptions,
+Downloads from HuggingFace (Teklia/IAM-line), extracts line images + transcriptions,
 writes as Parquet shards to paperless-datalake/warehouse/iam_dataset/{split}/
 """
 
@@ -65,8 +65,8 @@ def ingest_split(client: Minio, dataset, split: str):
 
     for i, sample in enumerate(tqdm(dataset, desc=f"  {split}")):
         img_bytes = image_to_bytes(sample["image"])
-        text = sample.get("text", sample.get("transcription", ""))
-        sample_id = sample.get("id", f"{split}_{i:06d}")
+        text = sample.get("text", "")
+        sample_id = f"{split}_{i:06d}"
 
         batch_images.append(img_bytes)
         batch_texts.append(text)
@@ -94,12 +94,12 @@ def ingest_split(client: Minio, dataset, split: str):
         upload_parquet_shard(client, table, split, shard_idx)
 
 
-def upload_metadata(client: Minio, ds_info):
+def upload_metadata(client: Minio, ds):
     """Upload dataset metadata as JSON."""
     meta = {
-        "source": "HuggingFace: Teklia/IAM",
+        "source": "HuggingFace: Teklia/IAM-line",
         "description": "IAM Handwriting Database - line-level images with transcriptions",
-        "splits": {name: {"num_rows": ds_info[name].num_rows} for name in ds_info},
+        "splits": {name: {"num_rows": ds[name].num_rows} for name in ds},
         "schema": ["image_id", "image_png", "transcription", "split"],
     }
     buf = io.BytesIO(json.dumps(meta, indent=2).encode())
@@ -108,8 +108,8 @@ def upload_metadata(client: Minio, ds_info):
 
 
 def main():
-    log.info("Loading IAM dataset from HuggingFace...")
-    ds = load_dataset("Teklia/IAM", "lines", trust_remote_code=True)
+    log.info("Loading IAM-line dataset from HuggingFace...")
+    ds = load_dataset("Teklia/IAM-line")
 
     client = get_minio_client()
 
