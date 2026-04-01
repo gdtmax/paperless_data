@@ -5,6 +5,7 @@ CACHE_DIR = $(HOME)/paperless_cache
 .PHONY: up-db up-storage up-stream up-vector
 .PHONY: check-pg check-minio check-redpanda check-qdrant
 .PHONY: ingest ingest-iam ingest-squad augment-iam download-cache
+.PHONY: generate generate-api generate-traffic generate-stop
 
 # ── Lifecycle ─────────────────────────────────
 
@@ -86,6 +87,34 @@ augment-iam:
 		-e MINIO_ACCESS_KEY=admin \
 		-e MINIO_SECRET_KEY=paperless_minio \
 		paperless-ingest python augment_iam.py
+
+# ── Data Generator ────────────────────────────
+
+generate: generate-api generate-traffic
+
+generate-api:
+	docker build -t paperless-datagen ./data_generator
+	docker run -d --name datagen-api --network docker_default \
+		-e DB_DSN="host=postgres dbname=paperless user=user password=paperless_postgres" \
+		-e MINIO_ENDPOINT=minio:9000 \
+		-e MINIO_ACCESS_KEY=admin \
+		-e MINIO_SECRET_KEY=paperless_minio \
+		-e KAFKA_BROKER=redpanda:9092 \
+		-p 8000:8000 \
+		paperless-datagen
+	@echo "Stub API running on http://localhost:8000"
+	@sleep 3
+
+generate-traffic:
+	docker run --rm --name datagen-traffic --network docker_default \
+		paperless-datagen python generator.py \
+		--api-url http://datagen-api:8000 \
+		--rate 2.0 \
+		--duration 300
+
+generate-stop:
+	-docker stop datagen-api
+	-docker rm datagen-api
 
 # ── Health checks ─────────────────────────────
 
