@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "paperless_minio")
-BUCKET = "paperless-datalake"
+BUCKET = os.getenv("MINIO_BUCKET", "paperless-datalake")
 IAM_PREFIX = "warehouse/iam_dataset"
 AUGMENTATIONS_PER_IMAGE = 3  # 3x expansion
 SEED = 42
@@ -40,7 +40,7 @@ def get_minio_client() -> Minio:
         MINIO_ENDPOINT,
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
-        secure=False,
+        secure=MINIO_SECURE,
     )
 
 

@@ -113,22 +113,21 @@ Records the provenance of every external dataset ingested into the platform, ena
 
 ---
 
-### 2.2 MinIO — Object Storage
+### 2.2 Object Storage — CHI@TACC Persistent + MinIO Internal
 
-**Purpose:** Durable storage for raw images, cropped regions, ingested external datasets, and Iceberg table data.  
-**Written by:** Paperless-ngx upload handler (page images), HTR preprocessing service (crops), ingestion pipeline (external datasets), Airflow DAGs (Iceberg Parquet files).  
-**Versioning:** Iceberg manages versioning within `paperless-datalake`. Raw image buckets are append-only; files are never overwritten.
+**Purpose:** The platform uses two storage layers: (1) **CHI@TACC** persistent S3 storage at `chi.tacc.chameleoncloud.org:7480` for training datasets and ingested data (survives VM deletion, browsable by staff in Horizon GUI), and (2) **MinIO** internal storage for Docker service communication (uploaded images, cropped regions).
+**Written by:** Ingestion pipeline and batch pipeline write to CHI@TACC. Paperless-ngx upload handler and HTR preprocessing write to internal MinIO.
+**Versioning:** Batch pipeline outputs are versioned with timestamp-based snapshot IDs and manifest files. Raw image buckets are append-only.
 
-#### Buckets
+#### Internal MinIO Bucket: `paperless-images`
 
-**`paperless-images`**
 ```
 documents/{document_id}/page_{n}.png         Raw full-page scan images
 documents/{document_id}/regions/{region_id}.png  Cropped handwritten region images
 ```
 All uploaded document images. Written once at upload time, never modified. Soft-deleted documents retain their images until a cleanup job runs.
 
-**`paperless-datalake`**
+**CHI@TACC bucket contents (under `warehouse/`):**
 ```
 warehouse/
   iam_dataset/
@@ -151,7 +150,7 @@ warehouse/
     metadata/       Iceberg metadata and manifests
 ```
 
-**`paperless-staging`**
+#### Internal MinIO Bucket: `paperless-staging`
 ```
 temp/             Temporary files during ETL processing
 ```

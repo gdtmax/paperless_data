@@ -1,7 +1,7 @@
 """
-Ingest IAM Handwriting Dataset → MinIO
+Ingest IAM Handwriting Dataset → Object Storage
 Downloads from HuggingFace (Teklia/IAM-line), extracts line images + transcriptions,
-writes as Parquet shards to paperless-datalake/warehouse/iam_dataset/{split}/
+writes as Parquet shards to {bucket}/warehouse/iam_dataset/{split}/
 """
 
 import os
@@ -23,29 +23,29 @@ log = logging.getLogger(__name__)
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "paperless_minio")
-BUCKET = "paperless-datalake"
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+BUCKET = os.getenv("MINIO_BUCKET", "paperless-datalake")
 PREFIX = "warehouse/iam_dataset"
-SHARD_SIZE = 500  # rows per parquet file
+SHARD_SIZE = 500
 
 
 def get_minio_client() -> Minio:
+    log.info(f"Connecting to {MINIO_ENDPOINT} (secure={MINIO_SECURE})")
     return Minio(
         MINIO_ENDPOINT,
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
-        secure=False,
+        secure=MINIO_SECURE,
     )
 
 
 def image_to_bytes(img) -> bytes:
-    """Convert PIL Image to PNG bytes."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
 def upload_parquet_shard(client: Minio, table: pa.Table, split: str, shard_idx: int):
-    """Write a PyArrow table as Parquet and upload to MinIO."""
     buf = io.BytesIO()
     pq.write_table(table, buf)
     buf.seek(0)
@@ -55,7 +55,6 @@ def upload_parquet_shard(client: Minio, table: pa.Table, split: str, shard_idx: 
 
 
 def ingest_split(client: Minio, dataset, split: str):
-    """Process one split of the IAM dataset into Parquet shards."""
     log.info(f"Processing split: {split} ({len(dataset)} samples)")
 
     batch_images = []
@@ -83,7 +82,6 @@ def ingest_split(client: Minio, dataset, split: str):
             shard_idx += 1
             batch_images, batch_texts, batch_ids = [], [], []
 
-    # Upload remaining rows
     if batch_images:
         table = pa.table({
             "image_id": pa.array(batch_ids, type=pa.string()),
@@ -95,7 +93,6 @@ def ingest_split(client: Minio, dataset, split: str):
 
 
 def upload_metadata(client: Minio, ds):
-    """Upload dataset metadata as JSON."""
     meta = {
         "source": "HuggingFace: Teklia/IAM-line",
         "description": "IAM Handwriting Database - line-level images with transcriptions",
@@ -113,7 +110,6 @@ def main():
 
     client = get_minio_client()
 
-    # Ensure bucket exists
     if not client.bucket_exists(BUCKET):
         client.make_bucket(BUCKET)
 

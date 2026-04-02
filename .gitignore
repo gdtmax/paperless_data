@@ -1,0 +1,4 @@
+.env.chi
+__pycache__/
+*.pyc
+.DS_Store

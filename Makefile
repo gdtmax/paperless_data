@@ -1,10 +1,20 @@
 COMPOSE = docker compose -f docker/docker-compose.yaml
 CACHE_DIR = $(HOME)/paperless_cache
 
+# ── CHI@TACC Object Storage ──────────────────
+# Set these before running chi-* targets.
+# Generate credentials in the Chameleon Jupyter environment (see provision notebook).
+CHI_ENDPOINT ?= chi.tacc.chameleoncloud.org:7480
+CHI_ACCESS_KEY ?= $(shell echo $$CHI_ACCESS_KEY)
+CHI_SECRET_KEY ?= $(shell echo $$CHI_SECRET_KEY)
+CHI_BUCKET ?= paperless-chi
+
 .PHONY: up down restart status logs clean
 .PHONY: up-db up-storage up-stream up-vector
 .PHONY: check-pg check-minio check-redpanda check-qdrant
 .PHONY: ingest ingest-iam ingest-squad augment-iam download-cache
+.PHONY: chi-ingest chi-ingest-iam chi-ingest-squad chi-augment-iam
+.PHONY: chi-batch chi-batch-htr chi-batch-retrieval
 .PHONY: generate generate-api generate-traffic generate-stop
 .PHONY: demo-retrieval demo-htr
 .PHONY: batch batch-htr batch-retrieval
@@ -47,7 +57,7 @@ up-stream:
 up-vector:
 	$(COMPOSE) up -d qdrant
 
-# ── Ingestion Pipeline ────────────────────────
+# ── Ingestion to local MinIO (dev/testing) ────
 
 download-cache:
 	@mkdir -p $(CACHE_DIR)
@@ -62,7 +72,7 @@ download-cache:
 	@echo "Cache ready: $(CACHE_DIR)"
 
 ingest: ingest-iam ingest-squad augment-iam
-	@echo "Full ingestion pipeline complete."
+	@echo "Full ingestion pipeline complete (local MinIO)."
 
 ingest-iam:
 	docker build -t paperless-ingest ./ingestion
@@ -88,6 +98,43 @@ augment-iam:
 		-e MINIO_ENDPOINT=minio:9000 \
 		-e MINIO_ACCESS_KEY=admin \
 		-e MINIO_SECRET_KEY=paperless_minio \
+		paperless-ingest python augment_iam.py
+
+# ── Ingestion to CHI@TACC persistent storage ──
+
+chi-ingest: chi-ingest-iam chi-ingest-squad chi-augment-iam
+	@echo "Full ingestion pipeline complete (CHI@TACC)."
+
+chi-ingest-iam:
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm \
+		-e MINIO_ENDPOINT=$(CHI_ENDPOINT) \
+		-e MINIO_ACCESS_KEY=$(CHI_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(CHI_SECRET_KEY) \
+		-e MINIO_SECURE=true \
+		-e MINIO_BUCKET=$(CHI_BUCKET) \
+		paperless-ingest python ingest_iam.py
+
+chi-ingest-squad: download-cache
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm \
+		-e MINIO_ENDPOINT=$(CHI_ENDPOINT) \
+		-e MINIO_ACCESS_KEY=$(CHI_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(CHI_SECRET_KEY) \
+		-e MINIO_SECURE=true \
+		-e MINIO_BUCKET=$(CHI_BUCKET) \
+		-e CACHE_DIR=/cache \
+		-v $(CACHE_DIR):/cache:ro \
+		paperless-ingest python ingest_squad.py
+
+chi-augment-iam:
+	docker build -t paperless-ingest ./ingestion
+	docker run --rm \
+		-e MINIO_ENDPOINT=$(CHI_ENDPOINT) \
+		-e MINIO_ACCESS_KEY=$(CHI_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(CHI_SECRET_KEY) \
+		-e MINIO_SECURE=true \
+		-e MINIO_BUCKET=$(CHI_BUCKET) \
 		paperless-ingest python augment_iam.py
 
 # ── Data Generator ────────────────────────────
@@ -131,10 +178,10 @@ demo-htr:
 	docker build -t paperless-htr -f ./online_features/Dockerfile.htr ./online_features
 	docker run --rm paperless-htr
 
-# ── Batch Pipeline ────────────────────────────
+# ── Batch Pipeline (local MinIO) ──────────────
 
 batch: batch-htr batch-retrieval
-	@echo "Batch pipeline complete."
+	@echo "Batch pipeline complete (local MinIO)."
 
 batch-htr:
 	docker build -t paperless-batch ./batch_pipeline
@@ -152,6 +199,33 @@ batch-retrieval:
 		-e MINIO_ENDPOINT=minio:9000 \
 		-e MINIO_ACCESS_KEY=admin \
 		-e MINIO_SECRET_KEY=paperless_minio \
+		paperless-batch python batch_retrieval.py
+
+# ── Batch Pipeline (CHI@TACC) ─────────────────
+
+chi-batch: chi-batch-htr chi-batch-retrieval
+	@echo "Batch pipeline complete (CHI@TACC)."
+
+chi-batch-htr:
+	docker build -t paperless-batch ./batch_pipeline
+	docker run --rm --network docker_default \
+		-e DB_DSN="host=postgres dbname=paperless user=user password=paperless_postgres" \
+		-e MINIO_ENDPOINT=$(CHI_ENDPOINT) \
+		-e MINIO_ACCESS_KEY=$(CHI_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(CHI_SECRET_KEY) \
+		-e MINIO_SECURE=true \
+		-e MINIO_BUCKET=$(CHI_BUCKET) \
+		paperless-batch python batch_htr.py
+
+chi-batch-retrieval:
+	docker build -t paperless-batch ./batch_pipeline
+	docker run --rm --network docker_default \
+		-e DB_DSN="host=postgres dbname=paperless user=user password=paperless_postgres" \
+		-e MINIO_ENDPOINT=$(CHI_ENDPOINT) \
+		-e MINIO_ACCESS_KEY=$(CHI_ACCESS_KEY) \
+		-e MINIO_SECRET_KEY=$(CHI_SECRET_KEY) \
+		-e MINIO_SECURE=true \
+		-e MINIO_BUCKET=$(CHI_BUCKET) \
 		paperless-batch python batch_retrieval.py
 
 # ── Health checks ─────────────────────────────

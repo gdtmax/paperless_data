@@ -45,7 +45,7 @@ DB_DSN = os.getenv("DB_DSN", "host=postgres dbname=paperless user=user password=
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "paperless_minio")
-BUCKET = "paperless-datalake"
+BUCKET = os.getenv("MINIO_BUCKET", "paperless-datalake")
 PREFIX = "warehouse/htr_training"
 SHARD_SIZE = 500
 VAL_WINDOW_DAYS = 14  # most recent N days → validation set
@@ -59,7 +59,7 @@ def get_pg():
 
 def get_minio():
     return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS_KEY,
-                 secret_key=MINIO_SECRET_KEY, secure=False)
+                 secret_key=MINIO_SECRET_KEY, secure=MINIO_SECURE)
 
 
 def fetch_candidates(conn) -> list[dict]:

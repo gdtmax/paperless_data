@@ -1,72 +1,100 @@
-# Paperless-ngx ML Platform — Data Layer
+# Paperless-ngx ML Data Platform
 
-## Services
+**Team:** Dongting Gao (Training), Yikai Sun (Serving), Elnath Zhao (Data)
 
-| Service | Port | Credentials |
-|---|---|---|
-| PostgreSQL | 5432 | user / paperless_postgres |
-| Adminer (PG UI) | 5050 | System: PostgreSQL, Server: postgres |
-| MinIO | 9000 (API), 9001 (UI) | admin / paperless_minio |
-| Redpanda | 19092 (Kafka) | — |
-| Redpanda Console | 8090 | — |
-| Qdrant | 6333 (HTTP), 6334 (gRPC) | — |
+## Overview
 
-## Buckets
+Data infrastructure for a Paperless-ngx document management platform extended with HTR (handwriting text recognition) and semantic search ML features. Deployed on Chameleon Cloud with persistent object storage on CHI@TACC.
 
-| Bucket | Purpose |
+## Architecture
+
+| Component | Purpose |
 |---|---|
-| `paperless-images` | Raw page images and cropped handwritten regions |
-| `paperless-datalake` | Iceberg tables (IAM, SQuAD, training datasets) |
-| `paperless-staging` | Temporary ETL staging area |
-
-## Redpanda Topics
-
-| Topic | Written by | Consumed by |
-|---|---|---|
-| `paperless.uploads` | API on document upload | HTR service, indexing service |
-| `paperless.corrections` | API on correction submit | Re-indexing, Airflow |
-| `paperless.queries` | API on search query | Airflow retrieval DAG |
-| `paperless.feedback` | API on thumbs/click | Airflow retrieval DAG |
+| PostgreSQL | Application state — documents, corrections, queries, feedback |
+| CHI@TACC Object Storage | **Persistent** S3 bucket — training datasets, ingested data (survives VM deletion) |
+| MinIO | Internal object storage for Docker services |
+| Redpanda | Event streaming — decouples API from downstream consumers |
+| Qdrant | Vector index for semantic search |
 
 ## Quick Start
 
+### 1. Provision on Chameleon
+
+Open `provision_chameleon.ipynb` in the Chameleon Jupyter environment and run all cells. This:
+- Provisions a VM on KVM@TACC
+- Creates a persistent bucket on CHI@TACC
+- Generates S3 credentials
+- Starts all Docker services
+
+### 2. Run pipelines
+
+SSH into the VM and run:
+
 ```bash
-# On Chameleon VM after SSH:
-git clone <your-repo-url>
-cd paperless_data
-make up
-make status
+cd ~/paperless_data
+
+# Ingest datasets to persistent storage (CHI@TACC)
+source .env.chi
+make chi-ingest
+
+# Generate synthetic production data
+make generate
+make generate-stop
+
+# Run batch pipeline to persistent storage
+source .env.chi
+make chi-batch
+
+# Demo online features
+make demo-htr
+make demo-retrieval
 ```
 
-## Chameleon Security Groups Required
+### 3. Browse persistent storage
 
-Open these ports in Horizon GUI:
+Go to https://chi.tacc.chameleoncloud.org → Object Store → Containers → your bucket.
 
-| Port | Service |
+## Repository Structure
+
+```
+├── docker/                  # Docker Compose + init SQL
+├── ingestion/               # IAM + SQuAD ingestion + augmentation
+├── data_generator/          # Stub API + synthetic traffic generator
+├── online_features/         # HTR + retrieval feature computation
+├── batch_pipeline/          # Versioned training data compilation
+├── docs/                    # Design doc + JSON samples
+├── provision_chameleon.ipynb # Chameleon setup notebook
+└── Makefile                 # All pipeline targets
+```
+
+## Make Targets
+
+| Target | Description |
 |---|---|
-| 22 | SSH |
-| 5050 | Adminer |
-| 9001 | MinIO Console |
-| 8090 | Redpanda Console |
-| 6333 | Qdrant |
+| `make up` / `make down` | Start/stop Docker services |
+| `make ingest` | Ingest to local MinIO (dev) |
+| `make chi-ingest` | Ingest to CHI@TACC persistent storage |
+| `make generate` | Run data generator (5 min of synthetic traffic) |
+| `make demo-htr` | Demo HTR online feature path |
+| `make demo-retrieval` | Demo retrieval online feature path |
+| `make batch` | Batch pipeline to local MinIO |
+| `make chi-batch` | Batch pipeline to CHI@TACC persistent storage |
 
-## Directory Structure
+## Persistent Storage
 
+Training data is stored in CHI@TACC object storage (S3-compatible), which persists independently of VM instances. Course staff can browse the bucket in the Horizon GUI without needing SSH access.
+
+Bucket contents:
 ```
-.
-├── docker/
-│   ├── docker-compose.yaml
-│   └── init_sql/
-│       ├── 00_create_app_tables.sql
-│       └── 01_create_iceberg_catalog.sql
-├── ingestion/          <- milestone 2
-├── data_generator/     <- milestone 3
-├── online_features/    <- milestone 3
-├── batch_pipeline/     <- milestone 4
-├── docs/
-│   └── data_design_document.md
-├── scripts/
-│   └── chameleon_setup.sh
-├── Makefile
-└── README.md
+warehouse/
+  iam_dataset/         # IAM handwriting line images + transcriptions
+  squad_dataset/       # SQuAD 2.0 retrieval triplets
+  htr_training/        # Versioned HTR training datasets (from batch pipeline)
+  retrieval_training/  # Versioned retrieval training datasets (from batch pipeline)
 ```
+
+## Credentials
+
+- **Adminer (PostgreSQL):** System=PostgreSQL, Server=postgres, User=user, Password=paperless_postgres, DB=paperless
+- **MinIO Console:** admin / paperless_minio
+- **CHI@TACC bucket:** See `.env.chi` on the VM (generated during provisioning)

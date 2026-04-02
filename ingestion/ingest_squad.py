@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "paperless_minio")
-BUCKET = "paperless-datalake"
+BUCKET = os.getenv("MINIO_BUCKET", "paperless-datalake")
 PREFIX = "warehouse/squad_dataset"
 SHARD_SIZE = 2000
 CACHE_DIR = os.getenv("CACHE_DIR", "/tmp/squad_cache")
@@ -47,7 +47,7 @@ def get_minio_client() -> Minio:
         MINIO_ENDPOINT,
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
-        secure=False,
+        secure=MINIO_SECURE,
     )
 
 
