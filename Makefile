@@ -120,16 +120,15 @@ generate-stop:
 # ── Online Feature Computation ────────────────
 
 demo-retrieval:
-	docker build -t paperless-features ./online_features
+	docker build -t paperless-retrieval -f ./online_features/Dockerfile ./online_features
 	docker run --rm --network docker_default \
 		-e QDRANT_HOST=qdrant \
 		-e QDRANT_PORT=6333 \
-		paperless-features python retrieval_features.py
+		paperless-retrieval
 
 demo-htr:
-	docker build -t paperless-features ./online_features
-	docker run --rm --network docker_default \
-		paperless-features python htr_features.py
+	docker build -t paperless-htr -f ./online_features/Dockerfile.htr ./online_features
+	docker run --rm paperless-htr
 
 # ── Health checks ─────────────────────────────
 
