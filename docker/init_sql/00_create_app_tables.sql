@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS documents (
     htr_text        TEXT,
     merged_text     TEXT,
     is_test_doc     BOOLEAN     DEFAULT FALSE,
-    deleted_at      TIMESTAMPTZ
+    deleted_at      TIMESTAMPTZ,
+    -- External identifier from the upstream Paperless instance. Required by
+    -- htr_consumer/db.py:86 which uses `ON CONFLICT (paperless_doc_id)` to
+    -- upsert on re-processing. UNIQUE also creates the non-partial index
+    -- that ON CONFLICT needs.
+    paperless_doc_id INTEGER UNIQUE
 );
 
 -- ── Document pages ───────────────────────────
