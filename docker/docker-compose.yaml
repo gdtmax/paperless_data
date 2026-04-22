@@ -69,7 +69,8 @@ services:
       mc mb --ignore-existing local/paperless-images &&
       mc mb --ignore-existing local/paperless-datalake &&
       mc mb --ignore-existing local/paperless-staging &&
-      echo 'Buckets ready.'
+      mc anonymous set download local/paperless-images &&
+      echo 'Buckets ready (paperless-images is public-read for region crops).'
       "
 
   # ── Redpanda ─────────────────────────────────
