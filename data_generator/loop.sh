@@ -26,11 +26,17 @@ set -e
 echo "[loop] waiting for Paperless at ${PAPERLESS_URL} ..."
 i=0
 while [ $i -lt 60 ]; do
+    # Reachable = any HTTP response (including 4xx auth errors). Only
+    # network errors (connection refused, DNS failure, timeout) count as
+    # not-ready. Using urllib's HTTPError to distinguish the two.
     if python3 -c "
-import sys, urllib.request
-req = urllib.request.Request('${PAPERLESS_URL}/api/', headers={'Authorization': 'Token ${PAPERLESS_TOKEN}'})
+import sys, urllib.request, urllib.error
+req = urllib.request.Request('${PAPERLESS_URL}/api/')
 try:
     urllib.request.urlopen(req, timeout=3)
+    sys.exit(0)
+except urllib.error.HTTPError:
+    # Server responded with a 4xx/5xx — that still means it's up
     sys.exit(0)
 except Exception:
     sys.exit(1)
