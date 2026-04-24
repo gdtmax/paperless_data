@@ -3,8 +3,7 @@
 #
 # The generator.py CLI exits after --duration seconds. For unattended
 # operation we wrap it in an infinite restart loop with a small sleep
-# between cycles. Between cycles the bot is idle — that tiny gap is
-# harmless.
+# between cycles.
 #
 # Required env: PAPERLESS_URL, PAPERLESS_TOKEN
 # Optional env: RATE (default 0.5), CYCLE_DURATION (default 600),
@@ -24,26 +23,34 @@ set -e
 : "${SLEEP_BETWEEN:=5}"
 
 echo "[loop] waiting for Paperless at ${PAPERLESS_URL} ..."
+# Probe a real authenticated endpoint with a known 200-or-401 contract.
+# /api/ returns 302 → /api/schema/view/, which urllib auto-follows and
+# can fail confusingly; /api/documents/ returns 200 with auth or 401
+# without, but both prove the server is UP. We accept any HTTP status
+# code (200, 302, 401, 403) and only treat network-level errors
+# (ConnectionRefused, DNS failure, timeout) as "still booting".
 i=0
 while [ $i -lt 60 ]; do
-    # Reachable = any HTTP response (including 4xx auth errors). Only
-    # network errors (connection refused, DNS failure, timeout) count as
-    # not-ready. Using urllib's HTTPError to distinguish the two.
-    if python3 -c "
+    CODE=$(python3 -c "
 import sys, urllib.request, urllib.error
-req = urllib.request.Request('${PAPERLESS_URL}/api/')
+req = urllib.request.Request(
+    '${PAPERLESS_URL}/api/documents/?page_size=1',
+    headers={'Authorization': 'Token ${PAPERLESS_TOKEN}'},
+)
 try:
-    urllib.request.urlopen(req, timeout=3)
-    sys.exit(0)
-except urllib.error.HTTPError:
-    # Server responded with a 4xx/5xx — that still means it's up
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-" 2>/dev/null; then
-        echo "[loop] Paperless reachable."
+    r = urllib.request.urlopen(req, timeout=3)
+    print(r.status); sys.exit(0)
+except urllib.error.HTTPError as e:
+    # Any HTTP response = server is up
+    print(e.code); sys.exit(0)
+except Exception as e:
+    # Network-level failure = still booting
+    print('NET_ERR:%s' % type(e).__name__); sys.exit(1)
+" 2>/dev/null) && {
+        echo "[loop] Paperless reachable (HTTP ${CODE})."
         break
-    fi
+    }
+    echo "[loop] not ready yet: ${CODE}"
     i=$((i + 1))
     sleep 5
 done
