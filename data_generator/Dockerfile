@@ -7,9 +7,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Default: run the live traffic generator against the integrated Paperless stack.
-# Callers must pass --paperless-token <token> or set $PAPERLESS_TOKEN.
-# The stub API is still shipped in this image; to run it instead, override
-# the CMD:  `docker run ... data-generator uvicorn stub_api:app --host 0.0.0.0 --port 8000`
+# Make loop.sh executable
+RUN chmod +x /app/loop.sh
+
+# Default: one-shot generator run via python generator.py.
+#   docker run ... -e PAPERLESS_TOKEN=... data-generator --rate 1.0 --duration 600
+#
+# For continuous unattended traffic, override the entrypoint:
+#   docker run ... --entrypoint /app/loop.sh -e PAPERLESS_URL=... -e PAPERLESS_TOKEN=... data-generator
+# The compose.yml does this for you.
 ENTRYPOINT ["python", "generator.py"]
 CMD ["--rate", "2.0", "--duration", "300"]

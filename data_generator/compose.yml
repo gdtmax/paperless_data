@@ -1,0 +1,48 @@
+# Data generator — continuous synthetic traffic against Paperless.
+#
+# Runs the existing generator.py in a restart loop (loop.sh) so it keeps
+# uploading docs indefinitely. Intended to run alongside the
+# behavior_emulator service (which handles corrections + search feedback).
+#
+# Deploy:
+#   PAPERLESS_TOKEN=<your-token> docker compose \
+#     -p data_generator \
+#     -f data_generator/compose.yml up -d --build
+#
+# Env vars:
+#   PAPERLESS_TOKEN    required — API token for the Paperless admin user
+#   RATE               default 0.5  — events per second (upload-only mode)
+#   CYCLE_DURATION     default 600  — seconds per generator subprocess
+#   UPLOAD_ONLY        default true — if true, no searches/corrections/feedback
+#                                      (behavior_emulator handles those)
+#   SLEEP_BETWEEN      default 5    — seconds between cycles
+#
+# To run full-stack mode (uploads + searches + corrections + feedback,
+# overlapping behavior_emulator):
+#   UPLOAD_ONLY=false docker compose -p data_generator \
+#     -f data_generator/compose.yml up -d --force-recreate
+
+services:
+  data_generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: data_generator:latest
+    container_name: data_generator
+    restart: unless-stopped
+    # Override default ENTRYPOINT (python generator.py) with the loop
+    # wrapper so the container runs continuously.
+    entrypoint: ["/app/loop.sh"]
+    environment:
+      PAPERLESS_URL:    http://webserver:8000
+      PAPERLESS_TOKEN:  ${PAPERLESS_TOKEN:?PAPERLESS_TOKEN env var must be set}
+      RATE:             ${DG_RATE:-0.5}
+      CYCLE_DURATION:   ${DG_CYCLE_DURATION:-600}
+      UPLOAD_ONLY:      ${DG_UPLOAD_ONLY:-true}
+      SLEEP_BETWEEN:    ${DG_SLEEP_BETWEEN:-5}
+    networks:
+      - paperless_ml_net
+
+networks:
+  paperless_ml_net:
+    external: true

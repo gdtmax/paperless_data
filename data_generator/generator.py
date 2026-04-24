@@ -274,34 +274,42 @@ class PaperlessTrafficGenerator:
 
     # ── Main loop ──────────────────────────────
 
-    def run(self, rate: float, duration: int):
+    def run(self, rate: float, duration: int, upload_only: bool = False):
         """
         rate: average events per second
         duration: total runtime in seconds
+        upload_only: if True, only generates document uploads (no searches,
+          corrections, or feedback). Use this when running alongside
+          behavior_emulator which owns the corrections + feedback streams.
 
-        Traffic pattern:
+        Traffic pattern (normal mode):
           First 20%: upload-heavy (build up documents before searching them)
           Middle 60%: mixed traffic
           Last 20%: search + feedback heavy (realistic ongoing usage)
         """
-        log.info(f"Starting traffic generator: rate={rate}/s, duration={duration}s")
+        log.info(
+            "Starting traffic generator: rate=%s/s, duration=%ss, upload_only=%s",
+            rate, duration, upload_only,
+        )
         log.info(f"Target Paperless: {self.paperless_url}")
 
         start = time.time()
         elapsed = 0.0
         while elapsed < duration:
-            progress = elapsed / duration
-            if progress < 0.2:
-                weights = [0.70, 0.15, 0.10, 0.05]  # upload, search, correction, feedback
-            elif progress < 0.8:
-                weights = [0.25, 0.35, 0.20, 0.20]
+            if upload_only:
+                action = self.do_upload
             else:
-                weights = [0.10, 0.40, 0.15, 0.35]
-
-            action = random.choices(
-                [self.do_upload, self.do_search, self.do_correction, self.do_feedback],
-                weights=weights,
-            )[0]
+                progress = elapsed / duration
+                if progress < 0.2:
+                    weights = [0.70, 0.15, 0.10, 0.05]  # upload, search, correction, feedback
+                elif progress < 0.8:
+                    weights = [0.25, 0.35, 0.20, 0.20]
+                else:
+                    weights = [0.10, 0.40, 0.15, 0.35]
+                action = random.choices(
+                    [self.do_upload, self.do_search, self.do_correction, self.do_feedback],
+                    weights=weights,
+                )[0]
             action()
 
             sleep_time = max(0.1, (1.0 / rate) + random.uniform(-0.2, 0.2))
@@ -339,6 +347,11 @@ def main():
                         help="Average events per second (default: 2.0)")
     parser.add_argument("--duration", type=int, default=300,
                         help="Total runtime in seconds (default: 300)")
+    parser.add_argument("--upload-only", action="store_true",
+                        default=os.environ.get("UPLOAD_ONLY", "").lower() in ("1", "true", "yes"),
+                        help="Only generate document uploads — no searches, corrections, "
+                             "or feedback. Intended for running alongside behavior_emulator "
+                             "which owns the corrections + feedback streams.")
     args = parser.parse_args()
 
     if not args.paperless_token:
@@ -348,7 +361,7 @@ def main():
         )
 
     gen = PaperlessTrafficGenerator(args.paperless_url, args.paperless_token)
-    gen.run(args.rate, args.duration)
+    gen.run(args.rate, args.duration, upload_only=args.upload_only)
 
 
 if __name__ == "__main__":
