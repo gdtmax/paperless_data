@@ -40,6 +40,16 @@ services:
       CYCLE_DURATION:   ${DG_CYCLE_DURATION:-600}
       UPLOAD_ONLY:      ${DG_UPLOAD_ONLY:-true}
       SLEEP_BETWEEN:    ${DG_SLEEP_BETWEEN:-5}
+      # IAM handwriting pool — read at startup from the existing IAM ingestion
+      # under paperless-datalake/iam_dataset/train/. Lets the generator paste
+      # REAL handwriting into synthetic pages instead of drawing blue squiggles.
+      MINIO_ENDPOINT:   minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: paperless_minio
+      IAM_BUCKET:       paperless-datalake
+      IAM_PREFIX:       iam_dataset/train/
+      IAM_POOL_SIZE:    ${DG_IAM_POOL_SIZE:-500}
+      IAM_MAX_SHARDS:   ${DG_IAM_MAX_SHARDS:-3}
     networks:
       - paperless_ml_net
 

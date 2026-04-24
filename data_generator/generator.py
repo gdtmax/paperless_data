@@ -38,12 +38,27 @@ import numpy as np
 from PIL import Image, ImageDraw
 from faker import Faker
 
+from iam_crops import IAMPool
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 fake = Faker()
 Faker.seed(42)
 random.seed(42)
+
+# IAM handwriting crop pool — loaded lazily on first page generation so
+# startup doesn't block when MinIO isn't reachable yet.
+_iam_pool: IAMPool | None = None
+
+
+def _get_iam_pool() -> IAMPool:
+    global _iam_pool
+    if _iam_pool is None:
+        _iam_pool = IAMPool()
+        n = _iam_pool.load()
+        log.info("IAM pool initialized with %d crops", n)
+    return _iam_pool
 
 # ── Synthetic data generators ──────────────────
 
@@ -82,7 +97,20 @@ CORRECTION_TEXTS = [
 
 
 def generate_synthetic_page() -> bytes:
-    """Create a synthetic document page image with text."""
+    """Create a synthetic document page with printed text + real handwriting.
+
+    The handwriting is pasted from a pool of IAM dataset line crops — real
+    human handwriting with known ground-truth transcriptions. This gives
+    TrOCR something real to transcribe (so its output is plausible text,
+    not gibberish) and downstream correction bots something real to
+    correct toward.
+
+    Falls back to a blue-squiggle placeholder if the IAM pool is empty
+    (MinIO unreachable, or IAM not yet ingested). That case still triggers
+    the slicer's ink-density detector; downstream just won't get useful
+    training signal from those regions.
+    """
+    from PIL import Image
     width, height = 850, 1100  # ~letter size at 100 DPI
     img = Image.new("RGB", (width, height), color=(252, 251, 248))
     draw = ImageDraw.Draw(img)
@@ -92,28 +120,63 @@ def generate_synthetic_page() -> bytes:
     draw.text((50, 70), fake.address().replace("\n", ", "), fill=(80, 80, 80))
     draw.line([(50, 100), (800, 100)], fill=(150, 150, 150), width=2)
 
-    # Body text
+    # Printed body text — fills the top half so the page has realistic
+    # printed content for Tesseract to handle.
     y = 130
-    for _ in range(random.randint(8, 20)):
+    for _ in range(random.randint(6, 12)):
         line = fake.sentence(nb_words=random.randint(6, 14))
         draw.text((50, y), line, fill=(40, 40, 40))
         y += 22
-        if y > 900:
+        if y > 500:
             break
 
-    # Handwritten scribbles (dark ink — should trigger region detection)
-    for _ in range(random.randint(1, 3)):
-        x_start = random.randint(50, 400)
-        y_start = random.randint(200, 800)
-        points = [
-            (x_start + i * 8, y_start + random.randint(-3, 3))
-            for i in range(random.randint(10, 30))
-        ]
-        draw.line(points, fill=(20, 20, 150), width=3)
+    # Handwritten crops from IAM. Paste 1–3 of them at plausible positions
+    # in the lower half (simulating hand-written annotations on a printed
+    # form). If the pool is empty, fall back to the old squiggle so the
+    # slicer still fires.
+    pool = _get_iam_pool()
+    n_handwritten = random.randint(1, 3)
 
-    # Margin note in red
+    if len(pool) > 0:
+        y_cursor = 600
+        for _ in range(n_handwritten):
+            crop_record = pool.sample()
+            if crop_record is None:
+                break
+            try:
+                crop = Image.open(io.BytesIO(crop_record.image_png)).convert("RGB")
+            except Exception as exc:
+                log.debug("skipping bad IAM crop: %s", exc)
+                continue
+
+            # Resize to a plausible handwriting scale on a letter page.
+            # IAM line heights vary; normalize target height so pasted
+            # crops look like they could have been written on this doc.
+            target_h = random.randint(45, 80)
+            scale = target_h / crop.height
+            new_w = min(int(crop.width * scale), width - 120)
+            crop = crop.resize((new_w, target_h), Image.LANCZOS)
+
+            x = random.randint(60, max(60, width - new_w - 60))
+            if y_cursor + target_h > height - 60:
+                break
+            img.paste(crop, (x, y_cursor))
+            y_cursor += target_h + random.randint(20, 50)
+    else:
+        # Fallback squiggle (old behavior). Only runs if IAM pool failed to load.
+        for _ in range(n_handwritten):
+            x_start = random.randint(50, 400)
+            y_start = random.randint(600, 900)
+            points = [
+                (x_start + i * 8, y_start + random.randint(-3, 3))
+                for i in range(random.randint(10, 30))
+            ]
+            draw.line(points, fill=(20, 20, 150), width=3)
+
+    # Occasional red margin note (unchanged from previous version — this
+    # is printed text, not handwriting, so doesn't participate in HTR).
     if random.random() < 0.4:
-        note_y = random.randint(200, 700)
+        note_y = random.randint(200, 500)
         draw.text((650, note_y), random.choice(CORRECTION_TEXTS)[:20], fill=(180, 30, 30))
 
     buf = io.BytesIO()
