@@ -1,14 +1,14 @@
 """
-Post-ingestion data quality validation for IAM and SQuAD datasets.
+Post-ingestion data quality validation for IAM dataset.
 
-Runs AFTER ingest_iam.py and ingest_squad.py finish writing Parquet shards
-to MinIO. Verifies the external-data ingestion didn't silently drop rows,
-corrupt bytes, or produce out-of-spec records that would poison training.
+Runs AFTER ingest_iam.py finishes writing Parquet shards to MinIO.
+Verifies the external-data ingestion didn't silently drop rows, corrupt
+bytes, or produce out-of-spec records that would poison training.
 
 This is the "point 1" deliverable in the data-role rubric: data quality at
 ingestion from external sources.
 
-Checks per dataset (see spec below for thresholds):
+Checks:
 
   IAM  (image + transcription pairs):
     I1  row_count_nonzero      every split has at least N rows
@@ -17,21 +17,18 @@ Checks per dataset (see spec below for thresholds):
     I4  text_nonempty          < X% of transcriptions are blank after strip
     I5  image_dimensions       width/height within expected bounds
 
-  SQuAD (query + passage + label triplets):
-    S1  row_count_nonzero
-    S2  schema_conforms
-    S3  label_distribution     positives ≈ negatives within tolerance
-    S4  text_nonempty          queries and passages non-blank after strip
-    S5  unicode_valid          strings decode as valid UTF-8
-
 Exit status:
     0   all checks pass
     1   one or more checks fail (CI should block promotion)
     2   validator itself crashed (e.g., MinIO unreachable)
 
-The report is written to s3://<bucket>/warehouse/<dataset>/_validation/
+The report is written to s3://<bucket>/warehouse/iam_dataset/_validation/
 <timestamp>.json alongside the shards, regardless of pass/fail, so the
 manifest history is permanent.
+
+Note: SQuAD validation was removed when the retrieval path stayed on
+pretrained mpnet — SQuAD data was never consumed, so its validator was
+dead code. Re-add if a contrastive retriever fine-tune gets built.
 """
 
 from __future__ import annotations
@@ -64,14 +61,11 @@ BUCKET           = os.getenv("MINIO_BUCKET",     "paperless-datalake")
 # ingestion failures (empty file, wrong schema, all-corrupt bytes) not
 # dataset-quality issues. Those belong in a later stage.
 IAM_MIN_ROWS_PER_SPLIT   = 100
-SQUAD_MIN_ROWS_PER_SPLIT = 1_000
 SAMPLE_SIZE              = 50          # how many rows to spot-check per shard
 MAX_BLANK_TEXT_FRAC      = 0.05        # ≤5% blank transcriptions/queries
-SQUAD_LABEL_BALANCE_TOL  = 0.20        # pos/(pos+neg) must be in [0.3, 0.7]
 
-# Expected Parquet columns, based on ingest_{iam,squad}.py.
+# Expected Parquet columns, based on ingest_iam.py.
 IAM_SCHEMA = {"image_id", "image_png", "transcription", "split"}
-SQUAD_SCHEMA = {"query", "passage", "label", "split"}
 
 # IAM images are line crops; heights are small, widths vary a lot.
 IAM_HEIGHT_BOUNDS = (16, 512)
@@ -238,96 +232,6 @@ def validate_iam(mc: Minio) -> DatasetReport:
     return report
 
 
-# ── SQuAD validation ──────────────────────────
-
-def validate_squad(mc: Minio) -> DatasetReport:
-    report = DatasetReport(
-        dataset="squad", started_at=datetime.now(timezone.utc).isoformat()
-    )
-    prefix = "warehouse/squad_dataset/"
-
-    shards = list_shards(mc, prefix)
-    if not shards:
-        report.add("S0_shards_found", False, f"no parquet shards under {prefix}")
-        return report
-    report.add("S0_shards_found", True, f"{len(shards)} shards",
-               shard_count=len(shards))
-
-    tables = [read_shard(mc, s) for s in shards]
-    total_rows = sum(len(t) for t in tables)
-    splits: dict[str, int] = {}
-    for t in tables:
-        if "split" in t.column_names:
-            for s in t.column("split").to_pylist():
-                splits[s] = splits.get(s, 0) + 1
-
-    # S1 — row count
-    bad = {s: n for s, n in splits.items() if n < SQUAD_MIN_ROWS_PER_SPLIT}
-    report.add(
-        "S1_row_count_nonzero",
-        splits and not bad,
-        f"per-split counts: {splits}" + (f" (below minimum: {bad})" if bad else ""),
-        total_rows=total_rows, per_split=splits,
-    )
-
-    # S2 — schema
-    schema_cols = set(tables[0].column_names)
-    missing = SQUAD_SCHEMA - schema_cols
-    report.add(
-        "S2_schema_conforms",
-        not missing,
-        f"columns={sorted(schema_cols)}" + (f" missing={sorted(missing)}" if missing else ""),
-        columns=sorted(schema_cols),
-    )
-    if missing:
-        return report
-
-    # S3 — label balance
-    pos = sum(int(l == 1) for t in tables for l in t.column("label").to_pylist())
-    neg = total_rows - pos
-    ratio = pos / total_rows if total_rows else 0.0
-    ratio_ok = abs(ratio - 0.5) <= SQUAD_LABEL_BALANCE_TOL
-    report.add(
-        "S3_label_distribution",
-        ratio_ok,
-        f"positives={pos} ({ratio:.2%}), negatives={neg}",
-        positives=pos, negatives=neg, positive_ratio=ratio,
-    )
-
-    # S4 + S5 — text check over full set (SQuAD rows are light)
-    blank_q = 0
-    blank_p = 0
-    utf8_bad = 0
-    for t in tables:
-        queries  = t.column("query").to_pylist()
-        passages = t.column("passage").to_pylist()
-        for q, p in zip(queries, passages):
-            if not (q or "").strip():
-                blank_q += 1
-            if not (p or "").strip():
-                blank_p += 1
-            try:
-                (q or "").encode("utf-8").decode("utf-8")
-                (p or "").encode("utf-8").decode("utf-8")
-            except UnicodeError:
-                utf8_bad += 1
-
-    q_frac = blank_q / total_rows if total_rows else 1.0
-    p_frac = blank_p / total_rows if total_rows else 1.0
-    report.add(
-        "S4_text_nonempty",
-        q_frac <= MAX_BLANK_TEXT_FRAC and p_frac <= MAX_BLANK_TEXT_FRAC,
-        f"blank queries={blank_q} ({q_frac:.2%}), blank passages={blank_p} ({p_frac:.2%})",
-        blank_queries=blank_q, blank_passages=blank_p,
-    )
-    report.add(
-        "S5_unicode_valid",
-        utf8_bad == 0,
-        f"{utf8_bad} rows with invalid utf-8",
-        invalid_utf8=utf8_bad,
-    )
-    return report
-
 
 # ── Report upload ─────────────────────────────
 
@@ -356,18 +260,7 @@ def main() -> int:
         log.error("MinIO setup failed: %s", exc)
         return 2
 
-    # VALIDATE_DATASETS env var lists which datasets to validate (comma-separated).
-    # Default is "iam" only — SQuAD was designed-in but never used by the
-    # retrieval path (which uses pretrained mpnet directly), so running its
-    # validator just writes noise reports to MinIO.
-    # To re-enable: export VALIDATE_DATASETS=iam,squad
-    _validators = {"iam": validate_iam, "squad": validate_squad}
-    _selected = [
-        s.strip().lower()
-        for s in os.environ.get("VALIDATE_DATASETS", "iam").split(",")
-        if s.strip()
-    ]
-    _to_run = [(name, _validators[name]) for name in _selected if name in _validators]
+    _to_run = [("iam", validate_iam)]
     log.info("validating datasets: %s", [n for n, _ in _to_run])
 
     all_passed = True

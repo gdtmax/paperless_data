@@ -58,7 +58,7 @@ Go to https://chi.tacc.chameleoncloud.org → Object Store → Containers → yo
 
 ```
 ├── docker/                  # Docker Compose + init SQL
-├── ingestion/               # IAM + SQuAD ingestion + augmentation
+├── ingestion/               # IAM ingestion + augmentation
 ├── data_generator/          # Stub API + synthetic traffic generator
 ├── online_features/         # HTR + retrieval feature computation
 ├── batch_pipeline/          # Versioned training data compilation
@@ -88,7 +88,6 @@ Bucket contents:
 ```
 warehouse/
   iam_dataset/         # IAM handwriting line images + transcriptions
-  squad_dataset/       # SQuAD 2.0 retrieval triplets
   htr_training/        # Versioned HTR training datasets (from batch pipeline)
   retrieval_training/  # Versioned retrieval training datasets (from batch pipeline)
 ```
