@@ -356,9 +356,23 @@ def main() -> int:
         log.error("MinIO setup failed: %s", exc)
         return 2
 
+    # VALIDATE_DATASETS env var lists which datasets to validate (comma-separated).
+    # Default is "iam" only — SQuAD was designed-in but never used by the
+    # retrieval path (which uses pretrained mpnet directly), so running its
+    # validator just writes noise reports to MinIO.
+    # To re-enable: export VALIDATE_DATASETS=iam,squad
+    _validators = {"iam": validate_iam, "squad": validate_squad}
+    _selected = [
+        s.strip().lower()
+        for s in os.environ.get("VALIDATE_DATASETS", "iam").split(",")
+        if s.strip()
+    ]
+    _to_run = [(name, _validators[name]) for name in _selected if name in _validators]
+    log.info("validating datasets: %s", [n for n, _ in _to_run])
+
     all_passed = True
     any_dataset_present = False
-    for name, fn in (("iam", validate_iam), ("squad", validate_squad)):
+    for name, fn in _to_run:
         log.info("-" * 40)
         log.info("Validating %s", name)
         log.info("-" * 40)
